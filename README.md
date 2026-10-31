@@ -8,6 +8,9 @@ programs.
 The library implements the wire protocol only. Transport concerns (TCP, TLS,
 uTLS fingerprints, sing-box routing/accounting) belong to the caller:
 
+- **[PROTOCOL.md](PROTOCOL.md)** — the public wire specification (framing,
+  authentication, settings, padding v2, HTTPS fronting, UoT, versioning, and
+  the differences from AnyTLS).
 - `protocol/` — frame format, commands, authentication, settings, session
   multiplexing and streams.
 - `padding/` — TSUNAMI padding scheme v2 parser and per-stream padding writer.
@@ -16,6 +19,13 @@ uTLS fingerprints, sing-box routing/accounting) belong to the caller:
   site handler (`builtin`, `local`, `remote` camouflage modes).
 - root package `tsunami` — `Client` (session pool, `Dial`/`CreateStream`) and
   `Service` (server-side authentication and per-stream handler).
+
+## License
+
+This module is licensed under the GNU General Public License, version 3 or
+later (see [LICENSE](LICENSE)). Portions are derived from the MIT-licensed
+TSUNAMI reference implementation; see [NOTICE](NOTICE) for the attribution and
+the MIT text.
 
 ## Usage sketch
 
