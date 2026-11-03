@@ -29,6 +29,11 @@ const (
 	// defaultNonceTTL covers the full accepted timestamp window plus margin, so
 	// a nonce cannot be replayed after its timestamp becomes unacceptable.
 	defaultNonceTTL = ClockSkew + 30*time.Second
+	// defaultNonceCacheMaxEntries bounds the replay cache. Only requests with
+	// a valid signature are inserted, so the cache normally grows with the
+	// (small) rate of new authenticated tunnels; the cap is a safety net
+	// against a client that holds a fronting key and floods requests.
+	defaultNonceCacheMaxEntries = 1 << 17
 )
 
 // NonceCache records recently seen request nonces so that replayed fronting
@@ -36,16 +41,17 @@ const (
 // for ClockSkew+30s. Expired entries are pruned lazily on Add, so the cache
 // holds no goroutine and never needs to be closed.
 type NonceCache struct {
-	mu        sync.Mutex
-	entries   map[string]time.Time
-	ttl       time.Duration
-	lastPrune time.Time
+	mu         sync.Mutex
+	entries    map[string]time.Time
+	ttl        time.Duration
+	lastPrune  time.Time
+	maxEntries int
 }
 
 // NewNonceCache returns a nonce cache that remembers nonces for ttl. A ttl <= 0
 // selects the default of ClockSkew+30s.
 func NewNonceCache(ttl time.Duration) *NonceCache {
-	return &NonceCache{ttl: ttl}
+	return &NonceCache{ttl: ttl, maxEntries: defaultNonceCacheMaxEntries}
 }
 
 // Add records nonce and reports whether it was not seen before. It returns
@@ -77,6 +83,25 @@ func (c *NonceCache) add(nonce string, now time.Time) bool {
 	}
 	if _, seen := c.entries[nonce]; seen {
 		return false
+	}
+	if c.maxEntries <= 0 {
+		c.maxEntries = defaultNonceCacheMaxEntries
+	}
+	if len(c.entries) >= c.maxEntries {
+		// The cache is a replay-protection aid, not a correctness boundary:
+		// evict a slice of entries rather than growing without bound. This can
+		// only happen when a party that knows a fronting key floods requests.
+		count := c.maxEntries / 8
+		if count < 1 {
+			count = 1
+		}
+		for seen := range c.entries {
+			if count == 0 {
+				break
+			}
+			delete(c.entries, seen)
+			count--
+		}
 	}
 	c.entries[nonce] = now
 	return true
@@ -159,20 +184,27 @@ func VerifyRequest(req *http.Request, keys [][32]byte, now time.Time, skew time.
 		return false
 	}
 
-	// Replay protection is evaluated before the MAC so that a failed signature
-	// also burns its nonce (fail closed).
-	if cache != nil && !cache.Add(nonce) {
-		return false
-	}
-
+	// Verify the MAC before touching the replay cache. A failed signature never
+	// establishes a tunnel, so there is nothing to protect by burning its
+	// nonce; inserting unauthenticated nonces would let any client grow the
+	// cache without bound (memory DoS). Only validated requests take the replay
+	// check, and Add is atomic so concurrent replays still collapse to one.
 	path := requestPath(req)
+	valid := false
 	for _, key := range keys {
 		want := computeMAC(req.Method, path, req.Host, ts, nonce, key)
 		if subtle.ConstantTimeCompare([]byte(strings.ToLower(signature)), []byte(want)) == 1 {
-			return true
+			valid = true
+			break
 		}
 	}
-	return false
+	if !valid {
+		return false
+	}
+	if cache != nil && !cache.Add(nonce) {
+		return false
+	}
+	return true
 }
 
 // requestPath returns the escaped request path used by the HMAC. The fallback

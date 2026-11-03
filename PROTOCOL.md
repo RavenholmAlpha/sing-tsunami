@@ -286,8 +286,15 @@ implementation that does not use them MUST NOT require them.
 - Flow control is implementation-defined (a bounded per-stream read buffer with
   backpressure is the reference behaviour). There is no window-update frame in
   this protocol; a slow receiver applies backpressure by not reading from the
-  transport. Implementations SHOULD bound per-stream buffering and MUST close
-  the session if a peer violates framing invariants.
+  transport. Implementations SHOULD bound per-stream buffering.
+- Implementations MUST/SHOULD bound the number of concurrent streams per
+  session so a peer that sends `cmdSYN` without using the streams cannot
+  exhaust memory. The reference implementation defaults to 256 concurrent
+  streams and rejects excess `cmdSYN` frames with a non-empty `cmdSYNACK`
+  payload; peers treat that as a stream-open failure.
+- Implementations SHOULD close a stream whose destination address has not
+  arrived within a short timeout (the reference implementation uses 10s).
+- Implementations MUST close the session if a peer violates framing invariants.
 
 ## 7. Padding subsystem (scheme v2)
 

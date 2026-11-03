@@ -31,13 +31,18 @@ type Stream struct {
 	bytesWritten atomic.Int64
 }
 
+// streamReadBufFrames bounds the per-stream frame queue. Frames can be up to
+// 64 KiB, so this caps buffered data per stream at ~256 KiB; a slow reader
+// applies backpressure instead of letting a stream allocate without bound.
+const streamReadBufFrames = 4
+
 // newStream creates a new stream within a session.
 func newStream(id uint32, session *Session) *Stream {
 	return &Stream{
 		id:         id,
 		session:    session,
 		priority:   DefaultStreamPriority,
-		readBuf:    make(chan []byte, 1024), // large buffer to absorb short bursts
+		readBuf:    make(chan []byte, streamReadBufFrames),
 		doneCh:     make(chan struct{}),
 		openResult: make(chan error, 1),
 	}

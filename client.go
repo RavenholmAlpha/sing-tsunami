@@ -55,6 +55,11 @@ type ClientConfig struct {
 	// MinIdleSession is the minimum number of idle sessions to keep alive.
 	// Default 0: an idle client drains to zero sessions.
 	MinIdleSession int
+	// MaxStreams bounds concurrent streams per session. Defaults to 0
+	// (unlimited): the client is the stream opener, while the server enforces
+	// its own per-session limit. A positive value makes the client fail fast
+	// with protocol.ErrTooManyStreams instead of over-subscribing a session.
+	MaxStreams int
 }
 
 // Client is a TSUNAMI client. It maintains a pool of multiplexed sessions and
@@ -200,6 +205,7 @@ func (c *Client) startSession(conn net.Conn) (*protocol.Session, error) {
 	}
 
 	session := protocol.NewSession(conn, c.seq.Add(1))
+	session.SetMaxStreams(c.cfg.MaxStreams)
 
 	// Wire the padding writer into the session write path before the first
 	// frame is written: settings and every later frame must be padded.

@@ -37,6 +37,9 @@ type ClientConfig struct {
     IdleSessionCheckInterval time.Duration // default 30s
     IdleSessionTimeout       time.Duration // default 5m
     MinIdleSession           int           // default 0
+    // MaxStreams bounds concurrent streams per session; 0 = unlimited (the
+    // server enforces its own limit). Default 0.
+    MaxStreams int
 }
 
 func NewClient(ctx context.Context, cfg ClientConfig) (*Client, error)
@@ -52,6 +55,9 @@ type ServiceConfig struct {
     // brackets is possible; use net.JoinHostPort style consumers). The handler
     // owns conn and must close it.
     Handler func(ctx context.Context, conn net.Conn, source net.Addr, destination string)
+    // MaxStreams bounds concurrent streams per session. Default
+    // protocol.DefaultMaxStreams (256).
+    MaxStreams int
 }
 
 func NewService(cfg ServiceConfig) (*Service, error)
@@ -61,6 +67,15 @@ func (s *Service) NewConnection(ctx context.Context, conn net.Conn, source net.A
 
 func WriteAddr(w io.Writer, destination string) error // SOCKS5 ATYP encoding
 func ReadAddr(r io.Reader) (string, error)            // returns "host:port"
+```
+
+The protocol package exposes the limits used by the API above:
+
+```go
+const DefaultMaxStreams = 256
+func (s *Session) SetMaxStreams(n int) // n <= 0 disables the limit
+func (s *Session) MaxStreams() int
+var ErrTooManyStreams error
 ```
 
 ## Fronting API

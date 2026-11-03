@@ -24,6 +24,7 @@ type Session struct {
 	openMu             sync.Mutex // preserves on-wire SYN ordering for concurrent OpenStream calls
 	nextID             atomic.Uint32
 	lastRemoteStreamID uint32 // accessed only by the session event loop
+	maxStreams         int    // 0 disables the limit
 
 	// Session state
 	closed    atomic.Bool
@@ -55,6 +56,12 @@ type Session struct {
 	errCh chan error
 }
 
+// DefaultMaxStreams bounds how many streams one session may carry at once.
+// It is deliberately far above real browsing concurrency but low enough that a
+// SYN flood cannot exhaust memory or goroutines; callers can override it with
+// SetMaxStreams.
+const DefaultMaxStreams = 256
+
 // NewSession creates a new session over the given connection.
 func NewSession(conn io.ReadWriteCloser, seq uint64) *Session {
 	s := &Session{
@@ -64,12 +71,35 @@ func NewSession(conn io.ReadWriteCloser, seq uint64) *Session {
 		reader:       NewFrameReader(conn),
 		streams:      make(map[uint32]*Stream),
 		localVersion: CurrentVersion,
+		maxStreams:   DefaultMaxStreams,
 		errCh:        make(chan error, 1),
 	}
 	now := time.Now().UnixNano()
 	s.lastActive.Store(now)
 	s.lastPong.Store(now)
 	return s
+}
+
+// SetMaxStreams changes the per-session stream limit. n <= 0 disables the
+// limit. It should be called before the session starts processing streams.
+func (s *Session) SetMaxStreams(n int) {
+	s.streamMu.Lock()
+	s.maxStreams = n
+	s.streamMu.Unlock()
+}
+
+// MaxStreams returns the current per-session stream limit (0 = unlimited).
+func (s *Session) MaxStreams() int {
+	s.streamMu.RLock()
+	defer s.streamMu.RUnlock()
+	return s.maxStreams
+}
+
+// streamCount returns the number of currently tracked streams.
+func (s *Session) streamCount() int {
+	s.streamMu.RLock()
+	defer s.streamMu.RUnlock()
+	return len(s.streams)
 }
 
 // ReplaceConn swaps the underlying connection for a wrapped one (e.g., traffic shaping).
@@ -91,6 +121,10 @@ func (s *Session) OpenStream() (*Stream, error) {
 	if s.closed.Load() {
 		s.openMu.Unlock()
 		return nil, ErrSessionClosed
+	}
+	if limit := s.MaxStreams(); limit > 0 && s.streamCount() >= limit {
+		s.openMu.Unlock()
+		return nil, ErrTooManyStreams
 	}
 
 	id := s.nextID.Add(1)
@@ -367,6 +401,9 @@ func (s *Session) handleFrame(f *Frame) error {
 		}
 		if f.StreamID == 0 || f.StreamID <= s.lastRemoteStreamID || s.getStream(f.StreamID) != nil {
 			return s.writeFrame(NewFrame(CmdSYNACK, f.StreamID, []byte("invalid stream id")))
+		}
+		if limit := s.MaxStreams(); limit > 0 && s.streamCount() >= limit {
+			return s.writeFrame(NewFrame(CmdSYNACK, f.StreamID, []byte("too many streams")))
 		}
 
 		// Server-side: new stream opened by client.

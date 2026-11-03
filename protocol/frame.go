@@ -33,6 +33,7 @@ var (
 	ErrAuthPaddingTooLarge = errors.New("tsunami: authentication padding exceeds maximum length")
 	ErrVersionMismatch     = errors.New("tsunami: version mismatch")
 	ErrStreamRejected      = errors.New("tsunami: stream rejected")
+	ErrTooManyStreams      = errors.New("tsunami: too many concurrent streams")
 )
 
 // frameBufPool reuses frame encode buffers to reduce GC pressure under high throughput.
@@ -43,10 +44,10 @@ var frameBufPool = sync.Pool{
 	},
 }
 
-// RelayBufPool provides 256KB buffers for bidirectional relay copies.
+// RelayBufPool provides 64 KiB buffers for bidirectional relay copies.
 var RelayBufPool = sync.Pool{
 	New: func() any {
-		buf := make([]byte, 256*1024)
+		buf := make([]byte, 64*1024)
 		return &buf
 	},
 }

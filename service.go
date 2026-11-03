@@ -38,6 +38,10 @@ type ServiceConfig struct {
 	// net.SplitHostPort-style consumers). The handler owns conn and must close
 	// it.
 	Handler func(ctx context.Context, conn net.Conn, source net.Addr, destination string)
+	// MaxStreams bounds concurrent streams per session. Defaults to
+	// protocol.DefaultMaxStreams. A malicious peer that opens streams without
+	// using them cannot exhaust memory/goroutines beyond this bound.
+	MaxStreams int
 }
 
 // Service is the server side of the TSUNAMI protocol: it authenticates
@@ -56,6 +60,9 @@ func NewService(cfg ServiceConfig) (*Service, error) {
 	}
 	if len(cfg.Users) == 0 {
 		return nil, fmt.Errorf("tsunami: at least one user is required")
+	}
+	if cfg.MaxStreams <= 0 {
+		cfg.MaxStreams = protocol.DefaultMaxStreams
 	}
 
 	users := make(map[[protocol.AuthHashLen]byte]User, len(cfg.Users))
@@ -131,6 +138,7 @@ func (s *Service) NewConnection(ctx context.Context, conn net.Conn, source net.A
 	}
 
 	session := protocol.NewSession(conn, 0)
+	session.SetMaxStreams(s.cfg.MaxStreams)
 
 	// Wire the padding writer into the session write path before the settings
 	// reply is written: control frames are padded for the whole session.
@@ -209,7 +217,11 @@ func bindServerPadding(session *protocol.Session, pw *padding.Writer) {
 // handler in its own goroutine. The session invokes OnStreamOpen in a
 // goroutine, so reading the address here does not stall the session loop.
 func (s *Service) handleStream(ctx context.Context, transport net.Conn, source net.Addr, stream *protocol.Stream) {
+	// Close the stream if the client opens one but never sends a destination,
+	// so idle streams cannot pin a handler goroutine forever.
+	readTimer := time.AfterFunc(10*time.Second, func() { _ = stream.Close() })
 	destination, err := protocol.ReadSocksAddr(stream)
+	readTimer.Stop()
 	if err != nil {
 		_ = stream.Close()
 		return
